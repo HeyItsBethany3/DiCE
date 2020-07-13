@@ -1,8 +1,6 @@
-"""
-Module to generate diverse counterfactual explanations based on tensorflow 1.x
-"""
-from dice_ml.explainer_interfaces.explainer_base import ExplainerBase
-import tensorflow as tf
+"""Module to generate diverse counterfactual explanations based on tensorflow"""
+
+import tensorflow.compat.v1 as tf
 
 import numpy as np
 import random
@@ -11,8 +9,9 @@ import timeit
 import copy
 
 from dice_ml import diverse_counterfactuals as exp
+tf.compat.v1.disable_eager_execution()
 
-class DiceTensorFlow1(ExplainerBase):
+class DiceTensorFlow1:
 
     def __init__(self, data_interface, model_interface):
         """Init method
@@ -22,13 +21,11 @@ class DiceTensorFlow1(ExplainerBase):
 
         """
 
-        super().__init__(data_interface) # initiating data related parameters
-
         # create TensorFLow session if one is not already created
-        if tf.compat.v1.get_default_session() is not None:
-            self.dice_sess = tf.compat.v1.get_default_session()
+        if tf.get_default_session() is not None:
+            self.dice_sess = tf.get_default_session()
         else:
-            self.dice_sess = tf.compat.v1.InteractiveSession()
+            self.dice_sess = tf.InteractiveSession()
 
         # initializing model variables
         self.model = model_interface
@@ -36,25 +33,35 @@ class DiceTensorFlow1(ExplainerBase):
         # loading trained model
         self.model.load_model()
 
+        # get data-related parameters - minx and max for normalized continuous features
+        self.data_interface = data_interface
+        self.minx, self.maxx, self.encoded_categorical_feature_indexes = self.data_interface.get_data_params()
+
+        # min and max for continuous features in original scale
+        flattened_indexes = [item for sublist in self.encoded_categorical_feature_indexes for item in sublist]
+        self.encoded_continuous_feature_indexes = [ix for ix in range(len(self.minx[0])) if ix not in flattened_indexes]
+        org_minx, org_maxx = self.data_interface.get_minx_maxx(normalized=False)
+        self.cont_minx = list(org_minx[0][self.encoded_continuous_feature_indexes])
+        self.cont_maxx = list(org_maxx[0][self.encoded_continuous_feature_indexes])
+
+        # decimal precisions for continuous features
+        self.cont_precisions = [self.data_interface.get_decimal_precisions()[ix] for ix in self.encoded_continuous_feature_indexes]
+
         self.input_tensor = tf.Variable(self.minx, dtype=tf.float32)
         self.output_tensor = self.model.get_output(self.input_tensor)
 
         # hyperparameter initializations
         self.weights = []
-        self.weights_inits = tf.compat.v1.placeholder(tf.float32, shape=())
+        self.weights_inits = tf.placeholder(tf.float32, shape=())
         self.weights_assign = []
         for i in range(3):
             self.weights.append(tf.Variable(1.0, dtype=tf.float32))
-            self.weights_assign.append(tf.compat.v1.assign(self.weights[i], self.weights_inits))
+            self.weights_assign.append(tf.assign(self.weights[i], self.weights_inits))
 
         self.hyperparameters = []  # proximity_weight, diversity_weight, categorical_penalty
         self.cf_init_weights = []  # total_CFs, algorithm, features_to_vary
         self.loss_weights = []  # yloss_type, diversity_loss_type, feature_weights
         self.optimizer_weights = []  # optimizer
-
-        # number of output nodes of ML model
-        temp_input = tf.convert_to_tensor([tf.random.uniform([len(self.data_interface.encoded_feature_names)])], dtype=tf.float32)
-        self.num_ouput_nodes = self.dice_sess.run(self.model.get_output(temp_input)).shape[1]
 
     def generate_counterfactuals(self, query_instance, total_CFs, desired_class="opposite", proximity_weight=0.5, diversity_weight=1.0, categorical_penalty=0.1, algorithm="DiverseCF", features_to_vary="all", yloss_type="hinge_loss", diversity_loss_type="dpp_style:inverse_dist", feature_weights="inverse_mad", optimizer="tensorflow:adam", learning_rate=0.05, min_iter=500, max_iter=5000, project_iter=0, loss_diff_thres=1e-5, loss_converge_maxiter=1, verbose=False, init_near_query_instance=True, tie_random=False, stopping_threshold=0.5, posthoc_sparsity_param=0.1):
         """Generates diverse counterfactual explanations
@@ -90,10 +97,6 @@ class DiceTensorFlow1(ExplainerBase):
 
         """
 
-        # check feature MAD validity and throw warnings
-        if feature_weights == "inverse_mad":
-            self.data_interface.get_valid_mads(display_warnings=True, return_mads=False)
-
         if([total_CFs, algorithm, features_to_vary, yloss_type, diversity_loss_type, feature_weights, optimizer] != (self.cf_init_weights + self.loss_weights + self.optimizer_weights)):
             self.do_cf_initializations(total_CFs, algorithm, features_to_vary)
             self.do_loss_initializations(yloss_type, diversity_loss_type, feature_weights)
@@ -126,22 +129,22 @@ class DiceTensorFlow1(ExplainerBase):
             self.total_CFs = total_CFs  # size of counterfactual set
 
         # a placeholder for original instance
-        self.x1 = tf.compat.v1.placeholder(tf.float32, shape=(1, self.minx.shape[1]))
+        self.x1 = tf.placeholder(tf.float32, shape=(1, self.minx.shape[1]))
 
         # target CF placeholder
-        self.target_cf = tf.compat.v1.placeholder(tf.float32, (1, 1))
+        self.target_cf = tf.placeholder(tf.float32, (1, 1))
 
         # learning rate for GD
-        self.learning_rate = tf.compat.v1.placeholder(tf.float32, ())
+        self.learning_rate = tf.placeholder(tf.float32, ())
 
         # CF initializations
         self.cfs = []
-        self.cf_init = tf.compat.v1.placeholder(
+        self.cf_init = tf.placeholder(
             tf.float32, shape=(1, self.minx.shape[1]))
         self.cf_assign = []
         for i in range(self.total_CFs):
             self.cfs.append(tf.Variable(self.minx, dtype=tf.float32))
-            self.cf_assign.append(tf.compat.v1.assign(self.cfs[i], self.cf_init))
+            self.cf_assign.append(tf.assign(self.cfs[i], self.cf_init))
 
         # freezing those columns that need to be fixed
         self.feat_to_vary_idxs = self.data_interface.get_indexes_of_features_to_vary(features_to_vary=features_to_vary)
@@ -162,45 +165,41 @@ class DiceTensorFlow1(ExplainerBase):
 
     def predict_fn(self, input_instance):
         """prediction function"""
-        temp_preds = self.dice_sess.run(self.output_tensor, feed_dict={self.input_tensor: input_instance})
-        return np.array([preds[(self.num_ouput_nodes-1):] for preds in temp_preds])
+        return self.dice_sess.run(self.output_tensor, feed_dict={self.input_tensor: input_instance})
 
-    def compute_yloss(self, method):
+    def compute_first_part_of_loss(self, method):
         """Computes the first part (y-loss) of the loss function."""
-        yloss = 0.0
+        loss_part1 = 0.0
         for i in range(self.total_CFs):
             if method == "l2_loss":
                 temp_loss = tf.square(tf.subtract(
                     self.model.get_output(self.cfs_frozen[i]), self.target_cf))
-                temp_loss = temp_loss[:,(self.num_ouput_nodes-1):][0][0]
             elif method == "log_loss":
                 temp_logits = tf.log(tf.divide(tf.abs(tf.subtract(self.model.get_output(self.cfs_frozen[i]), 0.000001)), tf.subtract(
                     1.0, tf.abs(tf.subtract(self.model.get_output(self.cfs_frozen[i]), 0.000001)))))
-                temp_logits = temp_logits[:,(self.num_ouput_nodes-1):]
                 temp_loss = tf.nn.sigmoid_cross_entropy_with_logits(
-                    logits=temp_logits, labels=self.target_cf)[0][0]
+                    logits=temp_logits, labels=self.target_cf)
             elif method == "hinge_loss":
                 temp_logits = tf.log(tf.divide(tf.abs(tf.subtract(self.model.get_output(self.cfs_frozen[i]), 0.000001)), tf.subtract(
                     1.0, tf.abs(tf.subtract(self.model.get_output(self.cfs_frozen[i]), 0.000001)))))
-                temp_logits = temp_logits[:,(self.num_ouput_nodes-1):]
                 temp_loss = tf.losses.hinge_loss(
                     logits=temp_logits, labels=self.target_cf)
 
-            yloss = tf.add(yloss, temp_loss)
+            loss_part1 = tf.add(loss_part1, temp_loss)
 
-        return tf.divide(yloss, tf.cast(self.total_CFs, dtype=tf.float32))
+        return tf.divide(loss_part1, tf.cast(self.total_CFs, dtype=tf.float32))
 
     def compute_dist(self, x_hat, x1):
         """Compute weighted distance between two vectors."""
         return tf.reduce_sum(tf.multiply(tf.abs(tf.subtract(x_hat, x1)), self.feature_weights))
 
-    def compute_proximity_loss(self):
+    def compute_second_part_of_loss(self):
         """Compute the second part (distance from x1) of the loss function."""
-        proximity_loss = 0.0
+        loss_part2 = 0.0
         for i in range(self.total_CFs):
-            proximity_loss = tf.add(proximity_loss, self.compute_dist(
+            loss_part2 = tf.add(loss_part2, self.compute_dist(
                 self.cfs_frozen[i], self.x1))
-        return tf.divide(proximity_loss, tf.cast(tf.multiply(len(self.minx[0]), self.total_CFs), dtype=tf.float32))
+        return tf.divide(loss_part2, tf.cast(tf.multiply(len(self.minx[0]), self.total_CFs), dtype=tf.float32))
 
     def dpp_style(self, submethod):
         """Computes the DPP of a matrix."""
@@ -222,10 +221,10 @@ class DiceTensorFlow1(ExplainerBase):
                     det_entries.append(det_temp_entry)
 
         det_entries = tf.reshape(det_entries, [self.total_CFs, self.total_CFs])
-        diversity_loss = tf.matrix_determinant(det_entries)
-        return diversity_loss
+        loss_part3 = tf.matrix_determinant(det_entries)
+        return loss_part3
 
-    def compute_diversity_loss(self, method):
+    def compute_third_part_of_loss(self, method):
         """Computes the third part (diversity) of the loss function."""
         if self.total_CFs == 1:
             return tf.constant(0.0)
@@ -234,24 +233,24 @@ class DiceTensorFlow1(ExplainerBase):
             submethod = method.split(':')[1]
             return tf.reduce_sum(self.dpp_style(submethod))
         elif method == "avg_dist":
-            diversity_loss = 0.0
+            loss_part3 = 0.0
             count = 0.0
             # computing pairwise distance and transforming it to normalized similarity
             for i in range(self.total_CFs):
                 for j in range(i+1, self.total_CFs):
                     count += 1.0
-                    diversity_loss = tf.add(diversity_loss,
+                    loss_part3 = tf.add(loss_part3,
                                         tf.divide(1.0, tf.add(1.0, self.compute_dist(self.cfs_frozen[i], self.cfs_frozen[j]))))
-            return tf.subtract(1.0, tf.divide(diversity_loss, count))
+            return tf.subtract(1.0, tf.divide(loss_part3, count))
 
-    def compute_regularization_loss(self):
+    def compute_fourth_part_of_loss(self):
         """Adds a linear equality constraints to the loss functions - to ensure all levels of a categorical variable sums to one"""
-        regularization_loss = tf.constant(0.0)
+        loss_part4 = tf.constant(0.0)
         for i in range(self.total_CFs):
             for v in self.encoded_categorical_feature_indexes:
-                regularization_loss = tf.add(regularization_loss, tf.square(tf.subtract(
+                loss_part4 = tf.add(loss_part4, tf.square(tf.subtract(
                     tf.reduce_sum(self.cfs_frozen[i][0, v[0]:v[-1]+1]), 1.0)))
-        return regularization_loss
+        return loss_part4
 
     def do_loss_initializations(self, yloss_type="hinge_loss", diversity_loss_type="dpp_style:inverse_dist", feature_weights="inverse_mad"):
         """Defines the optimization loss"""
@@ -263,11 +262,11 @@ class DiceTensorFlow1(ExplainerBase):
         self.loss_weights = [self.yloss_type, self.diversity_loss_type, feature_weights]
 
         # loss part 1: y-loss
-        self.yloss = self.compute_yloss(self.yloss_type)
+        self.loss_part1 = self.compute_first_part_of_loss(self.yloss_type)
 
         # loss part 2: similarity between CFs and original instance
         if feature_weights == "inverse_mad":
-            normalized_mads = self.data_interface.get_valid_mads(normalized=True)
+            normalized_mads = self.data_interface.get_mads(normalized=True)
             feature_weights = {}
             for feature in normalized_mads:
                 feature_weights[feature] = round(1/normalized_mads[feature], 2)
@@ -282,22 +281,22 @@ class DiceTensorFlow1(ExplainerBase):
 
         self.feature_weights = tf.Variable(self.minx, dtype=tf.float32)
         self.dice_sess.run(
-            tf.compat.v1.assign(self.feature_weights, np.array(feature_weights_list, dtype=np.float32)))
+            tf.assign(self.feature_weights, np.array(feature_weights_list, dtype=np.float32)))
 
-        self.proximity_loss = self.compute_proximity_loss()
+        self.loss_part2 = self.compute_second_part_of_loss()
 
         # loss part 3: diversity between CFs
         if self.total_random_inits > 0:
             # random initialization method
-            self.diversity_loss = tf.constant(0.0, dtype=tf.float32)
+            self.loss_part3 = tf.constant(0.0, dtype=tf.float32)
         else:
-            self.diversity_loss = self.compute_diversity_loss(self.diversity_loss_type)
+            self.loss_part3 = self.compute_third_part_of_loss(self.diversity_loss_type)
 
         # loss part 4: diversity between CFs
-        self.regularization_loss = self.compute_regularization_loss()
+        self.loss_part4 = self.compute_fourth_part_of_loss()
 
         # final loss:
-        self.loss = tf.add(tf.subtract(tf.add(self.yloss, tf.scalar_mul(self.weights[0], self.proximity_loss)), tf.scalar_mul(self.weights[1], self.diversity_loss)), tf.scalar_mul(self.weights[2], self.regularization_loss))
+        self.loss = tf.add(tf.subtract(tf.add(self.loss_part1, tf.scalar_mul(self.weights[0], self.loss_part2)), tf.scalar_mul(self.weights[1], self.loss_part3)), tf.scalar_mul(self.weights[2], self.loss_part4))
 
     def tensorflow_optimizers(self, method="adam"):
         """Initializes tensorflow optimizers."""
@@ -442,7 +441,7 @@ class DiceTensorFlow1(ExplainerBase):
 
         # Prepares user defined query_instance for DiCE.
         query_instance = self.data_interface.prepare_query_instance(query_instance=query_instance, encode=True)
-        query_instance = np.array([query_instance.iloc[0].values], dtype=np.float32)
+        query_instance = np.array([query_instance.iloc[0].values])
 
         # find the predicted value of query_instance
         test_pred = self.predict_fn(query_instance)[0][0]
@@ -566,7 +565,7 @@ class DiceTensorFlow1(ExplainerBase):
             self.cfs_preds_sparse = copy.deepcopy(self.cfs_preds)
 
             normalized_quantiles = self.data_interface.get_quantiles_from_training_data(quantile=posthoc_sparsity_param, normalized=True)
-            normalized_mads = self.data_interface.get_valid_mads(normalized=True)
+            normalized_mads = self.data_interface.get_mads(normalized=True)
             for feature in normalized_quantiles:
                 normalized_quantiles[feature] = min(normalized_quantiles[feature], normalized_mads[feature])
 
