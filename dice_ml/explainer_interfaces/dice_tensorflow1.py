@@ -28,7 +28,7 @@ class DiceTensorFlow1(ExplainerBase):
         if tf.compat.v1.get_default_session() is not None:
             self.dice_sess = tf.compat.v1.get_default_session()
         else:
-            self.dice_sess = tf.InteractiveSession()
+            self.dice_sess = tf.compat.v1.InteractiveSession()
 
         # initializing model variables
         self.model = model_interface
@@ -41,11 +41,11 @@ class DiceTensorFlow1(ExplainerBase):
 
         # hyperparameter initializations
         self.weights = []
-        self.weights_inits = tf.placeholder(tf.float32, shape=())
+        self.weights_inits = tf.compat.v1.placeholder(tf.float32, shape=())
         self.weights_assign = []
         for i in range(3):
             self.weights.append(tf.Variable(1.0, dtype=tf.float32))
-            self.weights_assign.append(tf.assign(self.weights[i], self.weights_inits))
+            self.weights_assign.append(tf.compat.v1.assign(self.weights[i], self.weights_inits))
 
         self.hyperparameters = []  # proximity_weight, diversity_weight, categorical_penalty
         self.cf_init_weights = []  # total_CFs, algorithm, features_to_vary
@@ -126,22 +126,22 @@ class DiceTensorFlow1(ExplainerBase):
             self.total_CFs = total_CFs  # size of counterfactual set
 
         # a placeholder for original instance
-        self.x1 = tf.placeholder(tf.float32, shape=(1, self.minx.shape[1]))
+        self.x1 = tf.compat.v1.placeholder(tf.float32, shape=(1, self.minx.shape[1]))
 
         # target CF placeholder
-        self.target_cf = tf.placeholder(tf.float32, (1, 1))
+        self.target_cf = tf.compat.v1.placeholder(tf.float32, (1, 1))
 
         # learning rate for GD
-        self.learning_rate = tf.placeholder(tf.float32, ())
+        self.learning_rate = tf.compat.v1.placeholder(tf.float32, ())
 
         # CF initializations
         self.cfs = []
-        self.cf_init = tf.placeholder(
+        self.cf_init = tf.compat.v1.placeholder(
             tf.float32, shape=(1, self.minx.shape[1]))
         self.cf_assign = []
         for i in range(self.total_CFs):
             self.cfs.append(tf.Variable(self.minx, dtype=tf.float32))
-            self.cf_assign.append(tf.assign(self.cfs[i], self.cf_init))
+            self.cf_assign.append(tf.compat.v1.assign(self.cfs[i], self.cf_init))
 
         # freezing those columns that need to be fixed
         self.feat_to_vary_idxs = self.data_interface.get_indexes_of_features_to_vary(features_to_vary=features_to_vary)
@@ -282,7 +282,7 @@ class DiceTensorFlow1(ExplainerBase):
 
         self.feature_weights = tf.Variable(self.minx, dtype=tf.float32)
         self.dice_sess.run(
-            tf.assign(self.feature_weights, np.array(feature_weights_list, dtype=np.float32)))
+            tf.compat.v1.assign(self.feature_weights, np.array(feature_weights_list, dtype=np.float32)))
 
         self.proximity_loss = self.compute_proximity_loss()
 
